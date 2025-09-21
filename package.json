@@ -1,0 +1,44 @@
+{
+  "name": "orbit-messenger-frontend",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Modern Next.js frontend for Orbit Messenger chat application",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "@headlessui/react": "^2.2.8",
+    "axios": "^1.12.2",
+    "cors": "^2.8.5",
+    "date-fns": "^4.1.0",
+    "express": "^5.1.0",
+    "jsonwebtoken": "^9.0.2",
+    "lucide-react": "^0.544.0",
+    "mqtt": "^5.14.1",
+    "next": "15.5.3",
+    "pg": "^8.16.3",
+    "react": "19.1.0",
+    "react-dom": "19.1.0",
+    "uuid": "^13.0.0"
+  },
+  "devDependencies": {
+    "@eslint/eslintrc": "^3",
+    "@tailwindcss/postcss": "^4",
+    "eslint": "^9",
+    "eslint-config-next": "15.5.3",
+    "tailwindcss": "^4"
+  },
+  "keywords": [
+    "chat",
+    "messaging",
+    "real-time",
+    "mqtt",
+    "nextjs",
+    "react"
+  ],
+  "author": "Orbit Messenger Team",
+  "license": "MIT"
+}
