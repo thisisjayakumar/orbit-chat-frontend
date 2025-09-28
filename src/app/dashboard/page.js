@@ -95,7 +95,14 @@ export default function DashboardPage() {
           >
             <Menu className="h-5 w-5" />
           </button>
-          <h1 className="text-lg font-semibold text-gray-900">Orbit Messenger</h1>
+          <div className="text-center">
+            <h1 className="text-lg font-semibold text-gray-900">Orbit Messenger</h1>
+            {user?.organization_id && (
+              <p className="text-xs text-gray-400 font-mono">
+                {user.organization_id.substring(0, 8)}...
+              </p>
+            )}
+          </div>
           <button
             onClick={() => setUserSidebarOpen(!userSidebarOpen)}
             className="p-2 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-100"

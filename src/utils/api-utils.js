@@ -1,13 +1,14 @@
 import axios from 'axios';
+import { API_CONFIG } from '@/config/api-config';
 
 
-// API Base URLs
+// API Base URLs - dynamically determined based on hostname
 const API_BASE_URLS = {
-  auth: process.env.NEXT_PUBLIC_AUTH_SERVICE_URL || 'http://localhost:8080',
-  chat: process.env.NEXT_PUBLIC_CHAT_SERVICE_URL || 'http://localhost:8003',
-  presence: process.env.NEXT_PUBLIC_PRESENCE_SERVICE_URL || 'http://localhost:8002',
-  media: process.env.NEXT_PUBLIC_MEDIA_SERVICE_URL || 'http://localhost:8004',
-  keycloak: process.env.NEXT_PUBLIC_KEYCLOAK_URL || 'http://localhost:8080',
+  auth: process.env.NEXT_PUBLIC_AUTH_SERVICE_URL || API_CONFIG.auth,
+  chat: process.env.NEXT_PUBLIC_CHAT_SERVICE_URL || API_CONFIG.chat,
+  presence: process.env.NEXT_PUBLIC_PRESENCE_SERVICE_URL || API_CONFIG.presence,
+  media: process.env.NEXT_PUBLIC_MEDIA_SERVICE_URL || API_CONFIG.media,
+  keycloak: process.env.NEXT_PUBLIC_KEYCLOAK_URL || API_CONFIG.keycloak,
 };
 
 
@@ -135,56 +136,99 @@ export const mediaApi = createApiClient(API_BASE_URLS.media);
 
 // Auth helpers
 export const authHelpers = {
-  login: async (email, password, organizationId) => {
+  login: async (email, password) => {
     try {
-      const keycloakRealm = process.env.NEXT_PUBLIC_KEYCLOAK_REALM || 'master';
-      const keycloakClientId = process.env.NEXT_PUBLIC_KEYCLOAK_CLIENT_ID || 'orbit-messenger';
-      
-      const response = await authApi.post(`/realms/${keycloakRealm}/protocol/openid-connect/token`, 
-        new URLSearchParams({
-          grant_type: 'password',
-          client_id: keycloakClientId,
-          username: email, // Using email as username
-          password: password,
-          scope: 'openid profile email', // Add proper scopes
-        }), {
-          headers: {
-            'Content-Type': 'application/x-www-form-urlencoded',
-          },
-        }
-      );
-
-      const { access_token, refresh_token } = response.data;
-      
-      const userInfoResponse = await authApi.get(`/realms/${keycloakRealm}/protocol/openid-connect/userinfo`, {
-        headers: {
-          'Authorization': `Bearer ${access_token}`
-        }
+      // Try direct auth service login first
+      const response = await authApi.post('/api/v1/auth/login', {
+        email,
+        password
       });
 
-      const userInfo = userInfoResponse.data;
-      const user = {
-        id: userInfo.sub,
-        email: userInfo.email,
-        display_name: userInfo.name || userInfo.preferred_username,
-        username: userInfo.preferred_username,
-        organization_id: organizationId || 'default-org'
-      };
-
-      TokenManager.setToken(access_token);
+      const { user, token } = response.data;
+      
+      TokenManager.setToken(token);
       TokenManager.setUser(user);
 
-      return { user, token: access_token };
+      return { user, token };
     } catch (error) {
-      throw new Error(error.response?.data?.error_description || error.response?.data?.error || 'Login failed');
+      // If direct login fails, try Keycloak as fallback
+      console.warn('Direct login failed, trying Keycloak:', error.message);
+      
+      try {
+        const keycloakRealm = process.env.NEXT_PUBLIC_KEYCLOAK_REALM || 'master';
+        const keycloakClientId = process.env.NEXT_PUBLIC_KEYCLOAK_CLIENT_ID || 'orbit-messenger';
+        
+        const response = await authApi.post(`/realms/${keycloakRealm}/protocol/openid-connect/token`, 
+          new URLSearchParams({
+            grant_type: 'password',
+            client_id: keycloakClientId,
+            username: email,
+            password: password,
+            scope: 'openid profile email',
+          }), {
+            headers: {
+              'Content-Type': 'application/x-www-form-urlencoded',
+            },
+          }
+        );
+
+        const { access_token } = response.data;
+        
+        const userInfoResponse = await authApi.get(`/realms/${keycloakRealm}/protocol/openid-connect/userinfo`, {
+          headers: {
+            'Authorization': `Bearer ${access_token}`
+          }
+        });
+
+        const userInfo = userInfoResponse.data;
+        const user = {
+          id: userInfo.sub,
+          email: userInfo.email,
+          display_name: userInfo.name || userInfo.preferred_username,
+          username: userInfo.preferred_username,
+          organization_id: organizationId || 'default-org'
+        };
+
+        TokenManager.setToken(access_token);
+        TokenManager.setUser(user);
+
+        return { user, token: access_token };
+      } catch (keycloakError) {
+        throw new Error(error.response?.data?.error || keycloakError.response?.data?.error_description || 'Login failed');
+      }
     }
   },
 
-  register: async (email, password, displayName, organizationName) => {
+  register: async (email, username, password, displayName, organizationName, organizationId) => {
     try {
-      throw new Error('Registration should be handled through Keycloak admin interface or registration flow');
+      const requestBody = {
+        email,
+        username,
+        password,
+        display_name: displayName
+      };
+
+      // If organizationId is provided, use it to join existing org
+      if (organizationId && organizationId.trim()) {
+        requestBody.organization_id = organizationId.trim();
+      } else if (organizationName && organizationName.trim()) {
+        // Otherwise, create new org with provided name
+        requestBody.organization_name = organizationName.trim();
+      } else {
+        throw new Error('Either organization ID or organization name is required');
+      }
+
+      const response = await authApi.post('/api/v1/auth/register', requestBody);
+
+      const { user, token } = response.data;
+      
+      TokenManager.setToken(token);
+      TokenManager.setUser(user);
+
+      return { user, token };
     } catch (error) {
-      throw new Error(error.response?.data?.error || 'Registration not available - use Keycloak admin interface');
+      console.error('Registration error:', error);
+      throw new Error(error.response?.data?.error || 'Registration failed');
     }
   },
 
@@ -232,16 +276,72 @@ export const authHelpers = {
         throw new Error('User not authenticated');
       }
 
-      return {
-        username: `orbit_${user.id}`,
-        password: 'default_mqtt_password',
-        broker_url: process.env.NEXT_PUBLIC_MQTT_BROKER_URL || 'ws://localhost:8083/mqtt',
-        client_id: `orbit_web_${user.id}_${Date.now()}`
-      };
+      // Try to get proper MQTT credentials from auth service
+      try {
+        const response = await authApi.get('/api/v1/auth/mqtt-credentials');
+        return {
+          username: response.data.username,
+          password: response.data.password,
+          broker_url: process.env.NEXT_PUBLIC_MQTT_BROKER_URL || 'ws://localhost:8083/mqtt',
+          client_id: `orbit_web_${user.id}_${Date.now()}`
+        };
+      } catch (error) {
+        // Fallback to match backend format
+        console.warn('Failed to get MQTT credentials from auth service, using fallback');
+        return {
+          username: `user_${user.id}`, // Match backend format
+          password: 'default_mqtt_password',
+          broker_url: process.env.NEXT_PUBLIC_MQTT_BROKER_URL || 'ws://localhost:8083/mqtt',
+          client_id: `orbit_web_${user.id}_${Date.now()}`
+        };
+      }
     } catch (error) {
       throw new Error('Failed to get MQTT credentials');
     }
   },
+
+  getOrganizationUsers: async () => {
+    try {
+      console.log('Making API call to get organization users');
+      console.log('Auth API base URL:', authApi.defaults.baseURL);
+      console.log('Token available:', !!TokenManager.getToken());
+      console.log('User available:', !!TokenManager.getUser());
+      
+      const response = await authApi.get('/api/v1/auth/users');
+      console.log('Organization users API response:', response.data);
+      return response.data || [];
+    } catch (error) {
+      console.error('Organization users API error:', error);
+      console.error('Error response:', error.response?.data);
+      console.error('Error status:', error.response?.status);
+      throw new Error(error.response?.data?.error || 'Failed to get organization users');
+    }
+  },
+
+  searchUsers: async (query, limit = 10) => {
+    try {
+      const response = await authApi.get('/api/v1/auth/users/search', {
+        params: { q: query, limit }
+      });
+      return response.data;
+    } catch (error) {
+      console.error('Failed to search users:', error);
+      throw new Error(error.response?.data?.error || 'Failed to search users');
+    }
+  },
+
+  getUserByUsername: async (username) => {
+    try {
+      const response = await authApi.get(`/api/v1/auth/users/username/${username}`);
+      return response.data;
+    } catch (error) {
+      if (error.response?.status === 404) {
+        return null; // User not found
+      }
+      console.error('Failed to get user by username:', error);
+      throw new Error(error.response?.data?.error || 'Failed to get user');
+    }
+  }
 };
 
 // Error handler utility

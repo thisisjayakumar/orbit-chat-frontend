@@ -16,6 +16,7 @@ export default function LoginPage() {
   
   const [formData, setFormData] = useState({
     email: '',
+    username: '',
     password: '',
     displayName: '',
     organizationName: '',
@@ -51,24 +52,23 @@ export default function LoginPage() {
           throw new Error('Please fill in all required fields');
         }
 
-        // For login, we need an organization ID
-        // In a real app, you might have a separate step to select organization
-        // For now, we'll use a default or let the user enter it
-        const orgId = formData.organizationId || '00000000-0000-0000-0000-000000000000';
-        
-        await login(formData.email, formData.password, orgId);
+        // For login, we don't need organization ID - backend will find user in any org
+        await login(formData.email, formData.password);
       } else {
         // Register flow
-        if (!formData.email || !formData.password || !formData.displayName || !formData.organizationName) {
+        if (!formData.email || !formData.username || !formData.password || !formData.displayName) {
           throw new Error('Please fill in all required fields');
+        }
+
+        if (!formData.organizationId && !formData.organizationName) {
+          throw new Error('Please provide either an Organization ID to join existing organization or Organization Name to create new one');
         }
 
         if (formData.password.length < 6) {
           throw new Error('Password must be at least 6 characters long');
         }
 
-        // For Keycloak, registration should be handled through Keycloak admin interface
-        throw new Error('Registration is handled through Keycloak admin interface. Please contact your administrator.');
+        await register(formData.email, formData.username, formData.password, formData.displayName, formData.organizationName, formData.organizationId);
       }
 
       // Redirect will happen via useEffect when isAuthenticated changes
@@ -85,6 +85,7 @@ export default function LoginPage() {
     setError('');
     setFormData({
       email: '',
+      username: '',
       password: '',
       displayName: '',
       organizationName: '',
@@ -146,6 +147,33 @@ export default function LoginPage() {
               />
             </div>
 
+            {/* Username (Register only) */}
+            {!isLogin && (
+              <div>
+                <label htmlFor="username" className="block text-sm font-medium text-gray-700 mb-2">
+                  Username
+                </label>
+                <div className="relative">
+                  <span className="absolute left-3 top-2 text-gray-500">@</span>
+                  <input
+                    id="username"
+                    name="username"
+                    type="text"
+                    required={!isLogin}
+                    value={formData.username}
+                    onChange={handleInputChange}
+                    className="w-full pl-8 pr-3 py-2 border border-gray-300 text-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-colors"
+                    placeholder="username"
+                    pattern="[a-zA-Z0-9._]{3,30}"
+                    title="Username must be 3-30 characters and can only contain letters, numbers, underscores, and periods"
+                  />
+                </div>
+                <p className="text-xs text-gray-500 mt-1">
+                  Choose a unique username (3-30 characters, letters, numbers, _, .)
+                </p>
+              </div>
+            )}
+
             {/* Display Name (Register only) */}
             {!isLogin && (
               <div>
@@ -165,40 +193,55 @@ export default function LoginPage() {
               </div>
             )}
 
-            {/* Organization */}
-            {isLogin ? (
-              <div>
-                <label htmlFor="organizationId" className="block text-sm font-medium text-gray-700 mb-2">
-                  Organization ID
-                </label>
-                <input
-                  id="organizationId"
-                  name="organizationId"
-                  type="text"
-                  value={formData.organizationId}
-                  onChange={handleInputChange}
-                  className="w-full px-3 py-2 border border-gray-300 text-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-colors"
-                  placeholder="Enter organization ID (optional)"
-                />
-                <p className="text-xs text-gray-500 mt-1">
-                  Leave empty to use default organization
-                </p>
-              </div>
-            ) : (
-              <div>
-                <label htmlFor="organizationName" className="block text-sm font-medium text-gray-700 mb-2">
-                  Organization Name
-                </label>
-                <input
-                  id="organizationName"
-                  name="organizationName"
-                  type="text"
-                  required={!isLogin}
-                  value={formData.organizationName}
-                  onChange={handleInputChange}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-colors"
-                  placeholder="Enter your organization name"
-                />
+            {/* Organization Registration (Register only) */}
+            {!isLogin && (
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-3">
+                    Join Organization
+                  </label>
+                  
+                  {/* Organization ID Input */}
+                  <div className="mb-3">
+                    <label htmlFor="organizationId" className="block text-xs font-medium text-gray-600 mb-1">
+                      Organization ID (if joining existing)
+                    </label>
+                    <input
+                      id="organizationId"
+                      name="organizationId"
+                      type="text"
+                      value={formData.organizationId || ''}
+                      onChange={handleInputChange}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-colors font-mono text-sm"
+                      placeholder="e.g., 1381071e-f85a-4638-a02d-1866f90eba3f"
+                    />
+                    <p className="text-xs text-gray-500 mt-1">
+                      Get this from your admin or leave empty to create new organization
+                    </p>
+                    <div className="mt-2 p-2 bg-blue-50 rounded text-xs text-blue-700">
+                      💡 <strong>Tip:</strong> Ask your admin to copy the Organization ID from their dashboard and share it with you
+                    </div>
+                  </div>
+
+                  {/* Organization Name Input (for new orgs) */}
+                  <div>
+                    <label htmlFor="organizationName" className="block text-xs font-medium text-gray-600 mb-1">
+                      Organization Name (if creating new)
+                    </label>
+                    <input
+                      id="organizationName"
+                      name="organizationName"
+                      type="text"
+                      value={formData.organizationName}
+                      onChange={handleInputChange}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg text-gray-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-colors"
+                      placeholder="Enter new organization name"
+                    />
+                    <p className="text-xs text-gray-500 mt-1">
+                      Only fill this if creating a new organization
+                    </p>
+                  </div>
+                </div>
               </div>
             )}
 

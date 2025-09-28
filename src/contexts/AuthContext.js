@@ -40,8 +40,21 @@ export const AuthProvider = ({ children }) => {
 
           try {
             await initializeMqtt();
+            
+            // Set user presence to online after MQTT connection is established
+            // The MQTT client will handle presence notification automatically
+            console.log('MQTT initialized for user:', storedUser.id);
           } catch (mqttError) {
             console.warn('MQTT initialization failed:', mqttError);
+            
+            // Fallback: Set presence via REST API if MQTT fails
+            try {
+              const { presenceApiEndpoints } = await import('@/utils/api-list');
+              await presenceApiEndpoints.setUserStatus(storedUser.id, 'online', 'Available');
+              console.log('Fallback: Set user presence via REST API');
+            } catch (presenceError) {
+              console.error('Failed to set presence on auth init:', presenceError);
+            }
           }
         }
       } catch (error) {
@@ -64,7 +77,7 @@ export const AuthProvider = ({ children }) => {
       
       mqttClient.startHeartbeat();
 
-      await mqttClient.updatePresence('online');
+      // Don't set presence here - it will be handled by the dedicated presence calls
 
       mqttClient.onConnect(() => {
         setMqttConnected(true);
@@ -80,10 +93,10 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
-  const login = async (email, password, organizationId) => {
+  const login = async (email, password) => {
     try {
       setIsLoading(true);
-      const { user: loggedInUser, token } = await authHelpers.login(email, password, organizationId);
+      const { user: loggedInUser, token } = await authHelpers.login(email, password);
       
       setUser(loggedInUser);
       setIsAuthenticated(true);
@@ -95,7 +108,25 @@ export const AuthProvider = ({ children }) => {
       setOrganization(org);
       TokenManager.setOrganization(org);
 
+      // Set user presence to online immediately after login
+      try {
+        const { presenceApiEndpoints } = await import('@/utils/api-list');
+        await presenceApiEndpoints.setUserStatus(loggedInUser.id, 'online', 'Available');
+        console.log('Successfully set user presence to online after login');
+        
+        // Trigger a presence refresh event for other components to pick up
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('presence-updated', {
+            detail: { userId: loggedInUser.id, status: 'online' }
+          }));
+        }
+      } catch (presenceError) {
+        console.error('Failed to set presence after login:', presenceError);
+      }
+
+      // Initialize MQTT connection (this will also set presence)
       await initializeMqtt();
+      console.log('Login successful, MQTT initialized for user:', loggedInUser.id);
 
       return { user: loggedInUser, token };
     } catch (error) {
@@ -106,10 +137,10 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
-  const register = async (email, password, displayName, organizationName) => {
+  const register = async (email, username, password, displayName, organizationName, organizationId) => {
     try {
       setIsLoading(true);
-      const { user: newUser, token } = await authHelpers.register(email, password, displayName, organizationName);
+      const { user: newUser, token } = await authHelpers.register(email, username, password, displayName, organizationName, organizationId);
       
       setUser(newUser);
       setIsAuthenticated(true);
@@ -121,6 +152,14 @@ export const AuthProvider = ({ children }) => {
       setOrganization(org);
 
       await initializeMqtt();
+
+      // Set user presence to online
+      try {
+        const { presenceApiEndpoints } = await import('@/utils/api-list');
+        await presenceApiEndpoints.setUserStatus(newUser.id, 'online', 'Available');
+      } catch (presenceError) {
+        console.warn('Failed to set presence on registration:', presenceError);
+      }
 
       return { user: newUser, token };
     } catch (error) {
@@ -150,20 +189,27 @@ export const AuthProvider = ({ children }) => {
   };
 
   const updatePresence = async (status, customStatus = '') => {
-    if (!mqttConnected) {
-      throw new Error('MQTT not connected');
-    }
-
     try {
-      await mqttClient.updatePresence(status, customStatus);
-      
+      // Always update via REST API (this is what actually matters for the backend)
       if (user) {
+        console.log(`Updating presence via REST API: ${status} for user ${user.id}`);
         const { presenceApiEndpoints } = await import('@/utils/api-list');
-        await presenceApiEndpoints.setUserStatus(user.id, status, customStatus);
+        const result = await presenceApiEndpoints.setUserStatus(user.id, status, customStatus);
+        console.log('Presence update result:', result);
+      }
+
+      // Also update via MQTT if connected (for real-time notifications)
+      if (mqttConnected) {
+        try {
+          await mqttClient.updatePresence(status, customStatus);
+          console.log('MQTT presence update successful');
+        } catch (mqttError) {
+          console.warn('MQTT presence update failed:', mqttError);
+        }
       }
     } catch (error) {
       console.error('Failed to update presence:', error);
-      throw error;
+      // Don't throw error to prevent breaking the app
     }
   };
 
@@ -173,25 +219,36 @@ export const AuthProvider = ({ children }) => {
 
   useEffect(() => {
     const handleVisibilityChange = async () => {
-      if (!isAuthenticated || !mqttConnected) return;
+      if (!isAuthenticated || !mqttConnected || !user) return;
 
-      try {
-        if (document.hidden) {
-          await updatePresence('away');
-        } else {
-          await updatePresence('online');
+      // Add a longer delay to avoid race conditions and only trigger for real visibility changes
+      setTimeout(async () => {
+        try {
+          console.log('Visibility change detected. Document hidden:', document.hidden);
+          // Only set to away if the document has been hidden for a while (not just during navigation)
+          if (document.hidden) {
+            console.log('Setting presence to away due to document being hidden');
+            await updatePresence('away');
+          } else {
+            console.log('Setting presence to online due to document being visible');
+            await updatePresence('online');
+          }
+        } catch (error) {
+          console.error('Error updating presence on visibility change:', error);
         }
-      } catch (error) {
-        console.error('Error updating presence on visibility change:', error);
-      }
+      }, 5000); // 5 second delay to avoid conflicts with login presence setting
     };
 
-    document.addEventListener('visibilitychange', handleVisibilityChange);
+    // Only add the listener after a delay to avoid immediate triggering during login
+    const timeoutId = setTimeout(() => {
+      document.addEventListener('visibilitychange', handleVisibilityChange);
+    }, 10000); // 10 second delay before enabling visibility change handler
     
     return () => {
+      clearTimeout(timeoutId);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, [isAuthenticated, mqttConnected]);
+  }, [isAuthenticated, mqttConnected, user]);
 
   useEffect(() => {
     const handleBeforeUnload = async () => {
@@ -219,6 +276,13 @@ export const AuthProvider = ({ children }) => {
     updatePresence,
     getMqttClient,
   };
+
+  // Make context available globally for debugging
+  useEffect(() => {
+    if (typeof window !== 'undefined' && process.env.NODE_ENV === 'development') {
+      window.authContext = value;
+    }
+  }, [value]);
 
   return (
     <AuthContext.Provider value={value}>

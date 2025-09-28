@@ -1,5 +1,6 @@
 import mqtt from 'mqtt';
 import { authHelpers, TokenManager } from './api-utils';
+import { API_CONFIG } from '@/config/api-config';
 
 class MQTTClient {
   constructor() {
@@ -10,7 +11,7 @@ class MQTTClient {
     this.connectionCallbacks = [];
     this.disconnectionCallbacks = [];
     
-    this.brokerUrl = process.env.NEXT_PUBLIC_MQTT_BROKER_URL || 'ws://localhost:8083/mqtt';
+    this.brokerUrl = process.env.NEXT_PUBLIC_MQTT_BROKER_URL || API_CONFIG.mqtt;
     this.options = {
       keepalive: 60,
       clientId: `orbit_web_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
@@ -55,6 +56,9 @@ class MQTTClient {
           this.isConnected = true;
           
           this.subscribeToPresence(user.id);
+          
+          // Notify presence service about connection
+          this.notifyPresenceServiceConnection(user.id);
           
           this.connectionCallbacks.forEach(callback => callback());
           
@@ -326,6 +330,37 @@ class MQTTClient {
     if (this.heartbeatInterval) {
       clearInterval(this.heartbeatInterval);
       this.heartbeatInterval = null;
+    }
+  }
+
+  // Notify presence service about MQTT connection
+  async notifyPresenceServiceConnection(userId) {
+    try {
+      // Import presenceApiEndpoints dynamically to avoid circular imports
+      const { presenceApiEndpoints } = await import('@/utils/api-list');
+      
+      console.log('MQTT connected, setting user presence to online for user:', userId);
+      
+      // Set user status to online via existing API (this is the most reliable method)
+      await presenceApiEndpoints.setUserStatus(userId, 'online', 'Available');
+      console.log('Successfully set user status to online via REST API');
+      
+      // Trigger presence refresh event
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('presence-updated', {
+          detail: { userId, status: 'online' }
+        }));
+      }
+      
+      // Also try to publish via MQTT for real-time updates
+      try {
+        await this.updatePresence('online', 'Available');
+        console.log('Successfully published presence update via MQTT');
+      } catch (mqttError) {
+        console.warn('Failed to publish presence via MQTT:', mqttError);
+      }
+    } catch (error) {
+      console.error('Failed to notify presence service about connection:', error);
     }
   }
 

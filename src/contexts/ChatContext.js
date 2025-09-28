@@ -3,6 +3,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { useAuth } from './AuthContext';
 import { chatApiEndpoints, presenceApiEndpoints, mediaApiEndpoints, apiHelpers } from '@/utils/api-list';
+import debugStorage from '@/utils/debug-storage';
 
 const ChatContext = createContext({});
 
@@ -17,7 +18,35 @@ export const useChat = () => {
 export const ChatProvider = ({ children }) => {
   const { user, isAuthenticated, getMqttClient } = useAuth();
   
-  // State
+  // Helper functions for localStorage persistence
+  const getStorageKey = (key) => `orbit_chat_${user?.id}_${key}`;
+  
+  const loadFromStorage = (key, defaultValue = null) => {
+    if (typeof window === 'undefined' || !user?.id) return defaultValue;
+    try {
+      const storageKey = getStorageKey(key);
+      const stored = localStorage.getItem(storageKey);
+      const parsed = stored ? JSON.parse(stored) : defaultValue;
+      console.log(`📂 Loaded ${key} from storage:`, { key: storageKey, found: !!stored, dataLength: Array.isArray(parsed) ? parsed.length : Object.keys(parsed || {}).length });
+      return parsed;
+    } catch (error) {
+      console.warn(`Failed to load ${key} from storage:`, error);
+      return defaultValue;
+    }
+  };
+  
+  const saveToStorage = (key, value) => {
+    if (typeof window === 'undefined' || !user?.id) return;
+    try {
+      const storageKey = getStorageKey(key);
+      localStorage.setItem(storageKey, JSON.stringify(value));
+      console.log(`💾 Saved ${key} to storage:`, { key: storageKey, dataLength: Array.isArray(value) ? value.length : Object.keys(value || {}).length });
+    } catch (error) {
+      console.warn(`Failed to save ${key} to storage:`, error);
+    }
+  };
+  
+  // State - initialize with empty values first, load from storage after user is available
   const [conversations, setConversations] = useState([]);
   const [activeConversation, setActiveConversation] = useState(null);
   const [messages, setMessages] = useState({});
@@ -30,12 +59,54 @@ export const ChatProvider = ({ children }) => {
   // MQTT client
   const mqttClient = getMqttClient();
 
+  // Load cached data when user becomes available
+  useEffect(() => {
+    if (user?.id && typeof window !== 'undefined') {
+      console.log('🔄 User available, loading cached data for user:', user.id);
+      
+      // Enable storage watcher for debugging
+      if (process.env.NODE_ENV === 'development') {
+        debugStorage.watchStorage();
+      }
+      
+      // Load cached data
+      const cachedConversations = loadFromStorage('conversations', []);
+      const cachedActiveConversation = loadFromStorage('activeConversation', null);
+      const cachedMessages = loadFromStorage('messages', {});
+      const cachedParticipants = loadFromStorage('participants', {});
+      
+      // Only set if we have cached data
+      if (cachedConversations.length > 0) {
+        setConversations(cachedConversations);
+      }
+      if (cachedActiveConversation) {
+        setActiveConversation(cachedActiveConversation);
+      }
+      if (Object.keys(cachedMessages).length > 0) {
+        setMessages(cachedMessages);
+      }
+      if (Object.keys(cachedParticipants).length > 0) {
+        setParticipants(cachedParticipants);
+      }
+      
+      console.log('✅ Loaded cached data:', {
+        conversations: cachedConversations.length,
+        activeConversation: cachedActiveConversation,
+        messages: Object.keys(cachedMessages).length,
+        participants: Object.keys(cachedParticipants).length
+      });
+    }
+  }, [user?.id]);
+
   // Load conversations
-  const loadConversations = useCallback(async () => {
+  const loadConversations = useCallback(async (forceRefresh = false) => {
     if (!isAuthenticated || !user) return;
 
     try {
-      setIsLoading(true);
+      // Only show loading if we don't have cached data or forcing refresh
+      if (forceRefresh || conversations.length === 0) {
+        setIsLoading(true);
+      }
       setError(null);
       
       try {
@@ -52,7 +123,9 @@ export const ChatProvider = ({ children }) => {
 
         if (allParticipantIds.size > 0) {
           try {
-            const presenceResponse = await presenceApiEndpoints.getMultipleUserPresence(Array.from(allParticipantIds));
+            // Convert user IDs to strings for the presence API
+            const userIdsAsStrings = Array.from(allParticipantIds).map(id => String(id));
+            const presenceResponse = await presenceApiEndpoints.getMultipleUserPresence(userIdsAsStrings);
             setPresenceData(presenceResponse);
           } catch (presenceError) {
             console.warn('Presence service unavailable:', presenceError.message);
@@ -60,17 +133,22 @@ export const ChatProvider = ({ children }) => {
         }
       } catch (chatError) {
         console.warn('Chat service unavailable:', chatError.message);
-        setConversations([]);
-        setError('Chat service is not available. Please ensure your backend services are running.');
+        // Only clear conversations if we don't have cached ones and this is not a background refresh
+        if (conversations.length === 0) {
+          setConversations([]);
+          setError('Chat service is not available. Please ensure your backend services are running.');
+        }
       }
 
     } catch (error) {
       console.error('Failed to load conversations:', error);
-      setError('Unable to connect to chat services');
+      if (conversations.length === 0) {
+        setError('Unable to connect to chat services');
+      }
     } finally {
       setIsLoading(false);
     }
-  }, [isAuthenticated, user]);
+  }, [isAuthenticated, user, conversations.length]);
 
   // Load messages for a conversation
   const loadMessages = useCallback(async (conversationId, limit = 50, offset = 0) => {
@@ -100,7 +178,7 @@ export const ChatProvider = ({ children }) => {
       }));
 
       // Load presence for participants
-      const userIds = participantsData.map(p => p.user_id);
+      const userIds = participantsData.map(p => String(p.user_id));
       if (userIds.length > 0) {
         const presenceResponse = await presenceApiEndpoints.getMultipleUserPresence(userIds);
         setPresenceData(prev => ({ ...prev, ...presenceResponse }));
@@ -119,7 +197,7 @@ export const ChatProvider = ({ children }) => {
       setActiveConversation(conversationId);
       
       // Load messages and participants if not already loaded
-      if (!messages[conversationId]) {
+      if (!messages[conversationId] || messages[conversationId].length === 0) {
         await loadMessages(conversationId);
       }
       
@@ -134,10 +212,27 @@ export const ChatProvider = ({ children }) => {
       }
 
       // Mark conversation as read
-      await chatApiEndpoints.markAsRead(conversationId);
-      
-      // Refresh messages to get updated read status
-      await loadMessages(conversationId);
+      try {
+        await chatApiEndpoints.markAsRead(conversationId);
+        
+        // Only refresh messages if we need to update read status and we have messages
+        if (messages[conversationId] && messages[conversationId].length > 0) {
+          // Refresh in background to update read status without overwriting cached messages
+          setTimeout(async () => {
+            try {
+              const freshMessages = await chatApiEndpoints.getMessages(conversationId, 50, 0);
+              setMessages(prev => ({
+                ...prev,
+                [conversationId]: freshMessages
+              }));
+            } catch (error) {
+              console.warn('Failed to refresh message read status:', error);
+            }
+          }, 500);
+        }
+      } catch (error) {
+        console.warn('Failed to mark conversation as read:', error);
+      }
 
     } catch (error) {
       console.error('Failed to select conversation:', error);
@@ -433,12 +528,132 @@ export const ChatProvider = ({ children }) => {
     };
   }, [mqttClient, user, handleNewMessage, handleTypingIndicator, handlePresenceUpdate]);
 
-  // Load conversations on auth
-  useEffect(() => {
-    if (isAuthenticated && user) {
-      loadConversations();
+  // Refresh presence data for specific users
+  const refreshPresenceData = useCallback(async (userIds = null) => {
+    try {
+      let idsToRefresh = userIds;
+      
+      if (!idsToRefresh) {
+        // If no specific IDs provided, refresh all known users
+        const allParticipantIds = new Set();
+        conversations.forEach(conv => {
+          if (conv.participants) {
+            conv.participants.forEach(p => allParticipantIds.add(p.user_id));
+          }
+        });
+        
+        // Also add current user
+        if (user?.id) {
+          allParticipantIds.add(user.id);
+        }
+        
+        idsToRefresh = Array.from(allParticipantIds);
+      }
+      
+      if (idsToRefresh.length > 0) {
+        const userIdsAsStrings = idsToRefresh.map(id => String(id));
+        console.log('Refreshing presence data for users:', userIdsAsStrings);
+        const presenceResponse = await presenceApiEndpoints.getMultipleUserPresence(userIdsAsStrings);
+        console.log('Presence data refreshed:', presenceResponse);
+        setPresenceData(prev => ({ ...prev, ...presenceResponse }));
+        return presenceResponse;
+      }
+    } catch (error) {
+      console.error('Failed to refresh presence data:', error);
     }
-  }, [isAuthenticated, user, loadConversations]);
+  }, [conversations, user]);
+
+  // Persist state to localStorage
+  useEffect(() => {
+    if (user?.id && conversations.length > 0) {
+      saveToStorage('conversations', conversations);
+    }
+  }, [conversations, user?.id]);
+
+  useEffect(() => {
+    if (user?.id && activeConversation) {
+      saveToStorage('activeConversation', activeConversation);
+    }
+  }, [activeConversation, user?.id]);
+
+  useEffect(() => {
+    if (user?.id && Object.keys(messages).length > 0) {
+      saveToStorage('messages', messages);
+    }
+  }, [messages, user?.id]);
+
+  useEffect(() => {
+    if (user?.id && Object.keys(participants).length > 0) {
+      saveToStorage('participants', participants);
+    }
+  }, [participants, user?.id]);
+
+  // Clear storage on logout
+  useEffect(() => {
+    if (!isAuthenticated && typeof window !== 'undefined') {
+      // Clear all chat-related storage when user logs out
+      try {
+        const pattern = `orbit_chat_`;
+        for (let i = localStorage.length - 1; i >= 0; i--) {
+          const storageKey = localStorage.key(i);
+          if (storageKey && storageKey.startsWith(pattern)) {
+            localStorage.removeItem(storageKey);
+          }
+        }
+      } catch (error) {
+        console.warn('Failed to clear chat storage:', error);
+      }
+    }
+  }, [isAuthenticated]);
+
+  // Load conversations on auth - after cached data is loaded
+  useEffect(() => {
+    if (isAuthenticated && user?.id) {
+      // Small delay to ensure cached data is loaded first
+      const timer = setTimeout(() => {
+        if (conversations.length > 0) {
+          console.log('📱 Using cached conversations, will refresh in background');
+          // Refresh in background after a delay
+          setTimeout(() => loadConversations(true), 2000);
+        } else {
+          console.log('📡 No cached conversations, loading fresh data');
+          loadConversations();
+        }
+      }, 100);
+      
+      return () => clearTimeout(timer);
+    }
+  }, [isAuthenticated, user?.id, conversations.length]);
+
+  // Refresh presence data periodically and on auth
+  useEffect(() => {
+    if (!isAuthenticated || !user) return;
+
+    // Initial refresh after login
+    const initialRefresh = setTimeout(() => {
+      refreshPresenceData();
+    }, 2000); // Wait 2 seconds after login to refresh presence
+
+    // Set up periodic refresh
+    const interval = setInterval(() => {
+      refreshPresenceData();
+    }, 30000); // Refresh every 30 seconds
+
+    // Listen for presence update events
+    const handlePresenceUpdated = (event) => {
+      console.log('Received presence update event:', event.detail);
+      // Refresh presence data immediately when we get an update event
+      refreshPresenceData();
+    };
+
+    window.addEventListener('presence-updated', handlePresenceUpdated);
+
+    return () => {
+      clearTimeout(initialRefresh);
+      clearInterval(interval);
+      window.removeEventListener('presence-updated', handlePresenceUpdated);
+    };
+  }, [isAuthenticated, user, refreshPresenceData]);
 
   // Get conversation by ID
   const getConversation = useCallback((conversationId) => {
@@ -465,8 +680,28 @@ export const ChatProvider = ({ children }) => {
 
   // Get user presence
   const getUserPresence = useCallback((userId) => {
-    return presenceData[userId] || { status: 'offline' };
+    const presence = presenceData[userId] || { status: 'offline' };
+    console.log(`Getting presence for user ${userId}:`, presence);
+    return presence;
   }, [presenceData]);
+
+  // Debug function to inspect storage
+  const debugChatStorage = useCallback(() => {
+    console.log('=== CHAT CONTEXT DEBUG ===');
+    console.log('Current state:');
+    console.log('- conversations:', conversations.length);
+    console.log('- activeConversation:', activeConversation);
+    console.log('- messages:', Object.keys(messages).length, 'conversations with messages');
+    console.log('- participants:', Object.keys(participants).length, 'conversations with participants');
+    
+    console.log('\nLocalStorage data:');
+    debugStorage.logStorageSummary();
+    
+    return {
+      state: { conversations, activeConversation, messages, participants },
+      storage: debugStorage.getAllChatData()
+    };
+  }, [conversations, activeConversation, messages, participants]);
 
   const value = {
     // State
@@ -495,7 +730,18 @@ export const ChatProvider = ({ children }) => {
     getParticipants,
     getTypingUsers,
     getUserPresence,
+    refreshPresenceData,
+    
+    // Debug
+    debugChatStorage,
   };
+
+  // Make context available globally for debugging
+  useEffect(() => {
+    if (typeof window !== 'undefined' && process.env.NODE_ENV === 'development') {
+      window.chatContext = value;
+    }
+  }, [value]);
 
   return (
     <ChatContext.Provider value={value}>

@@ -5,9 +5,14 @@ export const chatApiEndpoints = {
   // Conversations
   createConversation: async (data) => {
     try {
+      console.log('Creating conversation with data:', data);
       const response = await chatApi.post('/api/v1/conversations', data);
+      console.log('Conversation created successfully:', response.data);
       return response.data;
     } catch (error) {
+      console.error('Conversation creation failed:', error);
+      console.error('Error response:', error.response?.data);
+      console.error('Error status:', error.response?.status);
       throw new Error(handleApiError(error));
     }
   },
@@ -116,18 +121,43 @@ export const presenceApiEndpoints = {
       const response = await presenceApi.get(`/api/v1/presence/${userId}`);
       return response.data;
     } catch (error) {
-      throw new Error(handleApiError(error));
+      console.warn('Presence service unavailable:', error.message);
+      // Return default offline status
+      return {
+        user_id: userId,
+        status: 'offline',
+        last_seen: new Date().toISOString()
+      };
     }
   },
 
   setUserStatus: async (userId, status, customStatus = '') => {
     try {
+      console.log(`Setting user ${userId} status to ${status} with custom status: ${customStatus}`);
+      console.log(`Presence API URL: ${presenceApi.defaults.baseURL}/api/v1/presence/${userId}/status`);
+      
       const response = await presenceApi.put(`/api/v1/presence/${userId}/status`, {
         status,
         custom_status: customStatus
       });
+      console.log(`Presence update successful for user ${userId}:`, response.data);
       return response.data;
     } catch (error) {
+      console.error(`Failed to set presence for user ${userId}:`, error);
+      console.error(`Error details:`, {
+        status: error.response?.status,
+        statusText: error.response?.statusText,
+        data: error.response?.data,
+        url: error.config?.url,
+        method: error.config?.method
+      });
+      
+      // If presence service is down, don't throw error - just log it
+      if (error.response?.status >= 500 || error.code === 'ECONNREFUSED') {
+        console.warn('Presence service appears to be down, continuing without presence update');
+        return { status: 'offline', message: 'Presence service unavailable' };
+      }
+      
       throw new Error(handleApiError(error));
     }
   },
@@ -139,7 +169,17 @@ export const presenceApiEndpoints = {
       });
       return response.data;
     } catch (error) {
-      throw new Error(handleApiError(error));
+      console.warn('Presence service unavailable:', error.message);
+      // Return default offline status for all users
+      const defaultPresence = {};
+      userIds.forEach(userId => {
+        defaultPresence[userId] = {
+          user_id: userId,
+          status: 'offline',
+          last_seen: new Date().toISOString()
+        };
+      });
+      return defaultPresence;
     }
   },
 
