@@ -5,9 +5,7 @@ export const chatApiEndpoints = {
   // Conversations
   createConversation: async (data) => {
     try {
-      console.log('Creating conversation with data:', data);
       const response = await chatApi.post('/api/v1/conversations', data);
-      console.log('Conversation created successfully:', response.data);
       return response.data;
     } catch (error) {
       console.error('Conversation creation failed:', error);
@@ -133,14 +131,10 @@ export const presenceApiEndpoints = {
 
   setUserStatus: async (userId, status, customStatus = '') => {
     try {
-      console.log(`Setting user ${userId} status to ${status} with custom status: ${customStatus}`);
-      console.log(`Presence API URL: ${presenceApi.defaults.baseURL}/api/v1/presence/${userId}/status`);
-      
       const response = await presenceApi.put(`/api/v1/presence/${userId}/status`, {
         status,
         custom_status: customStatus
       });
-      console.log(`Presence update successful for user ${userId}:`, response.data);
       return response.data;
     } catch (error) {
       console.error(`Failed to set presence for user ${userId}:`, error);
@@ -394,9 +388,11 @@ export const apiHelpers = {
 };
 
 // Export all endpoints
-export default {
+const apiList = {
   chat: chatApiEndpoints,
   presence: presenceApiEndpoints,
   media: mediaApiEndpoints,
   helpers: apiHelpers,
 };
+
+export default apiList;

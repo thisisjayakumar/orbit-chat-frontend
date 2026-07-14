@@ -1,14 +1,16 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { useChat } from '@/contexts/ChatContext';
 import { authHelpers } from '@/utils/api-utils';
 import UserSearch from './UserSearch';
-import { 
-  Settings, 
-  LogOut, 
-  User, 
+import { showToast } from '@/components/Toast';import Image from 'next/image';
+import {
+  Settings,
+  LogOut,
+  User,
   Circle,
   MessageCircle,
   Search,
@@ -28,6 +30,7 @@ const PRESENCE_STATUS = {
 };
 
 export default function UserSidebar() {
+  const router = useRouter();
   const { user, logout, updatePresence } = useAuth();
   const { conversations, getUserPresence, createConversation, refreshPresenceData } = useChat();
   
@@ -43,11 +46,9 @@ export default function UserSidebar() {
       try {
         // Check if user is authenticated first
         if (!user || !user.id) {
-          console.log('User not authenticated yet, skipping organization users load');
           return;
         }
 
-        console.log('Loading organization users for user:', user.id);
         const orgUsers = await authHelpers.getOrganizationUsers();
         
         // Filter out current user and add conversation info if available
@@ -75,11 +76,8 @@ export default function UserSidebar() {
           });
 
         setAllUsers(filteredUsers);
-        console.log('Successfully loaded', filteredUsers.length, 'organization users');
       } catch (error) {
         console.error('Failed to load organization users:', error);
-        console.error('Error details:', error.message);
-        console.error('User context:', user);
         // Fallback to conversation participants
         const uniqueUsers = new Map();
         
@@ -136,19 +134,16 @@ export default function UserSidebar() {
       const userData = allUsers.find(u => u.id === userId);
       if (userData?.conversation_id) {
         // Navigate to existing conversation
-        window.location.href = `/dashboard?conversation=${userData.conversation_id}`;
+        router.push(`/dashboard?conversation=${userData.conversation_id}`);
         return;
       }
 
       // Create new DM conversation
-      const conversation = await createConversation({
-        type: 'DM',
-        participant_ids: [userId]
-      });
+      const conversation = await createConversation('DM', [userId]);
 
       if (conversation) {
         // Navigate to new conversation
-        window.location.href = `/dashboard?conversation=${conversation.id}`;
+        router.push(`/dashboard?conversation=${conversation.id}`);
       }
     } catch (error) {
       console.error('Failed to start DM:', error);
@@ -170,10 +165,13 @@ export default function UserSidebar() {
           {/* User Avatar */}
           <div className="relative">
             {user?.avatar_url ? (
-              <img 
-                src={user.avatar_url} 
+              <Image
+                width={48}
+                height={48}
+                src={user.avatar_url}
                 alt={user.display_name}
-                className="w-12 h-12 rounded-full object-cover"
+                className="rounded-full object-cover"
+                unoptimized
               />
             ) : (
               <div className="w-12 h-12 bg-indigo-100 rounded-full flex items-center justify-center">
@@ -207,10 +205,13 @@ export default function UserSidebar() {
                 <span className="truncate" title={`Organization ID: ${user.organization_id}`}>
                   Org: {user.organization_id.substring(0, 8)}...
                 </span>
-                <button
-                  onClick={() => {
-                    navigator.clipboard.writeText(user.organization_id);
-                    // You could add a toast notification here
+                <button                      onClick={async () => {
+                    try {
+                      await navigator.clipboard.writeText(user.organization_id);
+                      showToast('Organization ID copied!');
+                    } catch (err) {
+                      console.error('Failed to copy:', err);
+                    }
                   }}
                   className="ml-1 p-1 hover:bg-gray-200 rounded"
                   title="Copy full Organization ID"
@@ -220,16 +221,15 @@ export default function UserSidebar() {
               </div>
             )}
             
-            {/* Debug button - remove in production */}
-            <button 
-              onClick={() => {
-                console.log('Manual presence refresh triggered');
-                refreshPresenceData();
-              }}
-              className="text-xs text-blue-500 hover:text-blue-700 mt-1 block"
-            >
-              🔄 Refresh Status
-            </button>
+            {/* Debug button - only in development */}
+            {process.env.NODE_ENV === 'development' && (
+              <button 
+                onClick={() => refreshPresenceData()}
+                className="text-xs text-blue-500 hover:text-blue-700 mt-1 block"
+              >
+                🔄 Refresh Status
+              </button>
+            )}
           </div>
 
           {/* Settings */}
@@ -237,7 +237,7 @@ export default function UserSidebar() {
             {/* Admin Dashboard Link - Only show for admins */}
             {user?.role === 'admin' && (
               <button 
-                onClick={() => window.location.href = '/admin'}
+                onClick={() => router.push('/admin')}
                 className="p-2 text-gray-400 hover:text-indigo-600 rounded-lg hover:bg-indigo-50"
                 title="Admin Dashboard"
               >
@@ -323,10 +323,13 @@ export default function UserSidebar() {
                     {/* Avatar */}
                     <div className="relative">
                       {userData.avatar_url ? (
-                        <img 
-                          src={userData.avatar_url} 
+                        <Image
+                          width={40}
+                          height={40}
+                          src={userData.avatar_url}
                           alt={userData.display_name}
-                          className="w-10 h-10 rounded-full object-cover"
+                          className="rounded-full object-cover"
+                          unoptimized
                         />
                       ) : (
                         <div className="w-10 h-10 bg-gray-200 rounded-full flex items-center justify-center">
@@ -393,10 +396,8 @@ export default function UserSidebar() {
       {showUserSearch && (
         <UserSearch
           onClose={() => setShowUserSearch(false)}
-          onUserSelect={(selectedUser, conversation) => {
-            console.log('User selected:', selectedUser);
-            console.log('Conversation created:', conversation);
-            // You can add additional logic here if needed
+          onUserSelect={() => {
+            // UserSearch handles navigation and state
           }}
         />
       )}

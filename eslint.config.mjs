@@ -20,6 +20,20 @@ const eslintConfig = [
       "next-env.d.ts",
     ],
   },
+  // Flag console.log in application source (use devLog from @/utils/debug instead)
+  {
+    files: ["src/**/*.js", "src/**/*.jsx"],
+    rules: {
+      "no-console": ["error", { allow: ["warn", "error"] }],
+    },
+  },
+  // Allow console.log in the debug utility itself
+  {
+    files: ["src/utils/debug.js"],
+    rules: {
+      "no-console": "off",
+    },
+  },
 ];
 
 export default eslintConfig;

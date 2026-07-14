@@ -1,3 +1,5 @@
+import { devLog } from '@/utils/debug';
+
 // Debug utility for localStorage inspection
 
 export const debugStorage = {
@@ -36,22 +38,22 @@ export const debugStorage = {
   clearAllChatData: () => {
     const keys = debugStorage.listChatKeys();
     keys.forEach(key => localStorage.removeItem(key));
-    console.log(`Cleared ${keys.length} chat storage keys`);
+    devLog(`Cleared ${keys.length} chat storage keys`);
   },
 
   // Log storage summary
   logStorageSummary: () => {
     const data = debugStorage.getAllChatData();
-    console.log('=== ORBIT CHAT STORAGE SUMMARY ===');
+    devLog('=== ORBIT CHAT STORAGE SUMMARY ===');
     Object.entries(data).forEach(([key, value]) => {
       if (value && typeof value === 'object' && !value.error) {
         const length = Array.isArray(value) ? value.length : Object.keys(value).length;
-        console.log(`${key}: ${Array.isArray(value) ? 'Array' : 'Object'} with ${length} items`);
+        devLog(`${key}: ${Array.isArray(value) ? 'Array' : 'Object'} with ${length} items`);
       } else {
-        console.log(`${key}:`, value);
+        devLog(`${key}:`, value);
       }
     });
-    console.log('================================');
+    devLog('================================');
   },
 
   // Watch for storage changes
@@ -61,19 +63,19 @@ export const debugStorage = {
     
     localStorage.setItem = function(key, value) {
       if (key.startsWith('orbit_chat_')) {
-        console.log(`🔄 Storage SET: ${key}`, { valueLength: value.length });
+        devLog(`🔄 Storage SET: ${key}`, { valueLength: value.length });
       }
       return originalSetItem.apply(this, arguments);
     };
     
     localStorage.removeItem = function(key) {
       if (key.startsWith('orbit_chat_')) {
-        console.log(`🗑️ Storage REMOVE: ${key}`);
+        devLog(`🗑️ Storage REMOVE: ${key}`);
       }
       return originalRemoveItem.apply(this, arguments);
     };
     
-    console.log('👀 Storage watcher enabled for orbit_chat_ keys');
+    devLog('👀 Storage watcher enabled for orbit_chat_ keys');
   }
 };
 

@@ -339,11 +339,8 @@ class MQTTClient {
       // Import presenceApiEndpoints dynamically to avoid circular imports
       const { presenceApiEndpoints } = await import('@/utils/api-list');
       
-      console.log('MQTT connected, setting user presence to online for user:', userId);
-      
       // Set user status to online via existing API (this is the most reliable method)
       await presenceApiEndpoints.setUserStatus(userId, 'online', 'Available');
-      console.log('Successfully set user status to online via REST API');
       
       // Trigger presence refresh event
       if (typeof window !== 'undefined') {
@@ -355,7 +352,6 @@ class MQTTClient {
       // Also try to publish via MQTT for real-time updates
       try {
         await this.updatePresence('online', 'Available');
-        console.log('Successfully published presence update via MQTT');
       } catch (mqttError) {
         console.warn('Failed to publish presence via MQTT:', mqttError);
       }

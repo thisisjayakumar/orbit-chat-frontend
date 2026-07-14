@@ -1,6 +1,6 @@
 'use client';
 
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useMemo } from 'react';
 import { TokenManager, authHelpers } from '@/utils/api-utils';
 import mqttClient from '@/utils/mqtt-client';
 
@@ -43,7 +43,7 @@ export const AuthProvider = ({ children }) => {
             
             // Set user presence to online after MQTT connection is established
             // The MQTT client will handle presence notification automatically
-            console.log('MQTT initialized for user:', storedUser.id);
+
           } catch (mqttError) {
             console.warn('MQTT initialization failed:', mqttError);
             
@@ -51,7 +51,7 @@ export const AuthProvider = ({ children }) => {
             try {
               const { presenceApiEndpoints } = await import('@/utils/api-list');
               await presenceApiEndpoints.setUserStatus(storedUser.id, 'online', 'Available');
-              console.log('Fallback: Set user presence via REST API');
+
             } catch (presenceError) {
               console.error('Failed to set presence on auth init:', presenceError);
             }
@@ -67,6 +67,7 @@ export const AuthProvider = ({ children }) => {
 
     const timeoutId = setTimeout(initializeAuth, 100);
     return () => clearTimeout(timeoutId);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Initialize MQTT connection
@@ -93,7 +94,7 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
-  const login = async (email, password) => {
+  const login = useCallback(async (email, password) => {
     try {
       setIsLoading(true);
       const { user: loggedInUser, token } = await authHelpers.login(email, password);
@@ -112,8 +113,6 @@ export const AuthProvider = ({ children }) => {
       try {
         const { presenceApiEndpoints } = await import('@/utils/api-list');
         await presenceApiEndpoints.setUserStatus(loggedInUser.id, 'online', 'Available');
-        console.log('Successfully set user presence to online after login');
-        
         // Trigger a presence refresh event for other components to pick up
         if (typeof window !== 'undefined') {
           window.dispatchEvent(new CustomEvent('presence-updated', {
@@ -126,7 +125,6 @@ export const AuthProvider = ({ children }) => {
 
       // Initialize MQTT connection (this will also set presence)
       await initializeMqtt();
-      console.log('Login successful, MQTT initialized for user:', loggedInUser.id);
 
       return { user: loggedInUser, token };
     } catch (error) {
@@ -135,9 +133,9 @@ export const AuthProvider = ({ children }) => {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, []);
 
-  const register = async (email, username, password, displayName, organizationName, organizationId) => {
+  const register = useCallback(async (email, username, password, displayName, organizationName, organizationId) => {
     try {
       setIsLoading(true);
       const { user: newUser, token } = await authHelpers.register(email, username, password, displayName, organizationName, organizationId);
@@ -168,9 +166,9 @@ export const AuthProvider = ({ children }) => {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, []);
 
-  const logout = async () => {
+  const logout = useCallback(async () => {
     try {
       if (mqttConnected) {
         await mqttClient.updatePresence('offline');
@@ -186,23 +184,20 @@ export const AuthProvider = ({ children }) => {
     setOrganization(null);
     setIsAuthenticated(false);
     setMqttConnected(false);
-  };
+  }, [mqttConnected]);
 
-  const updatePresence = async (status, customStatus = '') => {
+  const updatePresence = useCallback(async (status, customStatus = '') => {
     try {
       // Always update via REST API (this is what actually matters for the backend)
       if (user) {
-        console.log(`Updating presence via REST API: ${status} for user ${user.id}`);
         const { presenceApiEndpoints } = await import('@/utils/api-list');
-        const result = await presenceApiEndpoints.setUserStatus(user.id, status, customStatus);
-        console.log('Presence update result:', result);
+        await presenceApiEndpoints.setUserStatus(user.id, status, customStatus);
       }
 
       // Also update via MQTT if connected (for real-time notifications)
       if (mqttConnected) {
         try {
           await mqttClient.updatePresence(status, customStatus);
-          console.log('MQTT presence update successful');
         } catch (mqttError) {
           console.warn('MQTT presence update failed:', mqttError);
         }
@@ -211,7 +206,7 @@ export const AuthProvider = ({ children }) => {
       console.error('Failed to update presence:', error);
       // Don't throw error to prevent breaking the app
     }
-  };
+  }, [user, mqttConnected]);
 
   const getMqttClient = () => {
     return mqttClient;
@@ -224,13 +219,10 @@ export const AuthProvider = ({ children }) => {
       // Add a longer delay to avoid race conditions and only trigger for real visibility changes
       setTimeout(async () => {
         try {
-          console.log('Visibility change detected. Document hidden:', document.hidden);
           // Only set to away if the document has been hidden for a while (not just during navigation)
           if (document.hidden) {
-            console.log('Setting presence to away due to document being hidden');
             await updatePresence('away');
           } else {
-            console.log('Setting presence to online due to document being visible');
             await updatePresence('online');
           }
         } catch (error) {
@@ -248,7 +240,7 @@ export const AuthProvider = ({ children }) => {
       clearTimeout(timeoutId);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, [isAuthenticated, mqttConnected, user]);
+  }, [isAuthenticated, mqttConnected, user, updatePresence]);
 
   useEffect(() => {
     const handleBeforeUnload = async () => {
@@ -264,7 +256,7 @@ export const AuthProvider = ({ children }) => {
     };
   }, [mqttConnected]);
 
-  const value = {
+  const value = useMemo(() => ({
     user,
     organization,
     isAuthenticated,
@@ -275,7 +267,7 @@ export const AuthProvider = ({ children }) => {
     logout,
     updatePresence,
     getMqttClient,
-  };
+  }), [user, organization, isAuthenticated, isLoading, mqttConnected, login, register, logout, updatePresence]);
 
   // Make context available globally for debugging
   useEffect(() => {

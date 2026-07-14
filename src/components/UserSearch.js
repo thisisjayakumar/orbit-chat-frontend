@@ -1,6 +1,7 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
+import Image from 'next/image';
 import { Search, User, MessageCircle, X } from 'lucide-react';
 import { authHelpers } from '@/utils/api-utils';
 import { useAuth } from '@/contexts/AuthContext';
@@ -30,21 +31,7 @@ export default function UserSearch({ onClose, onUserSelect }) {
     }
   }, []);
 
-  // Debounced search
-  useEffect(() => {
-    const timeoutId = setTimeout(() => {
-      if (query.trim().length >= 2) {
-        handleSearch(query.trim());
-      } else {
-        setResults([]);
-        setError('');
-      }
-    }, 300);
-
-    return () => clearTimeout(timeoutId);
-  }, [query]);
-
-  const handleSearch = async (searchQuery) => {
+  const handleSearch = useCallback(async (searchQuery) => {
     setIsLoading(true);
     setError('');
 
@@ -74,7 +61,21 @@ export default function UserSearch({ onClose, onUserSelect }) {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [currentUser?.id]);
+
+  // Debounced search
+  useEffect(() => {
+    const timeoutId = setTimeout(() => {
+      if (query.trim().length >= 2) {
+        handleSearch(query.trim());
+      } else {
+        setResults([]);
+        setError('');
+      }
+    }, 300);
+
+    return () => clearTimeout(timeoutId);
+  }, [query, handleSearch]);
 
   const handleStartChat = async (user) => {
     try {
@@ -83,7 +84,6 @@ export default function UserSearch({ onClose, onUserSelect }) {
       // Create a DM conversation with the selected user
       const conversation = await createConversation(
         'DM',
-        null, // No title for DM
         [user.id] // Participant IDs
       );
       
@@ -178,10 +178,13 @@ export default function UserSearch({ onClose, onUserSelect }) {
                       {/* Avatar */}
                       <div className="relative">
                         {user.avatar_url ? (
-                          <img
+                          <Image
+                            width={40}
+                            height={40}
                             src={user.avatar_url}
                             alt={user.display_name}
-                            className="w-10 h-10 rounded-full object-cover"
+                            className="rounded-full object-cover"
+                            unoptimized
                           />
                         ) : (
                           <div className="w-10 h-10 bg-indigo-100 rounded-full flex items-center justify-center">

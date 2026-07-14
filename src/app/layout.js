@@ -2,6 +2,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { ChatProvider } from "@/contexts/ChatContext";
+import ToastContainer from "@/components/Toast";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -28,6 +29,7 @@ export default function RootLayout({ children }) {
         <AuthProvider>
           <ChatProvider>
             {children}
+            <ToastContainer />
           </ChatProvider>
         </AuthProvider>
       </body>
