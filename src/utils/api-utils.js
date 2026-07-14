@@ -302,18 +302,10 @@ export const authHelpers = {
 
   getOrganizationUsers: async () => {
     try {
-      console.log('Making API call to get organization users');
-      console.log('Auth API base URL:', authApi.defaults.baseURL);
-      console.log('Token available:', !!TokenManager.getToken());
-      console.log('User available:', !!TokenManager.getUser());
-      
       const response = await authApi.get('/api/v1/auth/users');
-      console.log('Organization users API response:', response.data);
       return response.data || [];
     } catch (error) {
       console.error('Organization users API error:', error);
-      console.error('Error response:', error.response?.data);
-      console.error('Error status:', error.response?.status);
       throw new Error(error.response?.data?.error || 'Failed to get organization users');
     }
   },
@@ -370,5 +362,7 @@ export const retryRequest = async (requestFn, maxRetries = 3, delay = 1000) => {
   }
 };
 
+const apiUtils = { authApi, chatApi, presenceApi, mediaApi, authHelpers, TokenManager };
+
 export { TokenManager };
-export default { authApi, chatApi, presenceApi, mediaApi, authHelpers, TokenManager };
+export default apiUtils;

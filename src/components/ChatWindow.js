@@ -3,7 +3,9 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useChat } from '@/contexts/ChatContext';
 import { useAuth } from '@/contexts/AuthContext';
+import { mediaApiEndpoints } from '@/utils/api-list';
 import { formatDistanceToNow, format, isToday, isYesterday } from 'date-fns';
+import Image from 'next/image';
 import { 
   Send, 
   Paperclip, 
@@ -17,7 +19,8 @@ import {
   Loader2,
   X,
   FileText,
-  Image
+  Image as ImageIcon,
+  Download
 } from 'lucide-react';
 
 export default function ChatWindow() {
@@ -44,6 +47,7 @@ export default function ChatWindow() {
   
   const messagesEndRef = useRef(null);
   const messageInputRef = useRef(null);
+  const [downloadingId, setDownloadingId] = useState(null);
   const typingTimeoutRef = useRef(null);
   const lastSendTimeRef = useRef(0);
   const fileInputRef = useRef(null);
@@ -199,6 +203,43 @@ export default function ChatWindow() {
 
   const handleAttachmentClick = () => {
     fileInputRef.current?.click();
+  };
+
+  // Handle file download
+  const handleDownload = async (attachmentId, fileName) => {
+    if (downloadingId) return;
+    
+    try {
+      setDownloadingId(attachmentId);
+      const response = await mediaApiEndpoints.getDownloadUrl(attachmentId);
+      
+      // The response could be { url: '...' } or just a URL string
+      const downloadUrl = response.url || response.download_url || response;
+      
+      // Create a temporary anchor and trigger download
+      const anchor = document.createElement('a');
+      anchor.href = downloadUrl;
+      anchor.download = fileName || 'download';
+      anchor.target = '_blank';
+      anchor.rel = 'noopener noreferrer';
+      document.body.appendChild(anchor);
+      anchor.click();
+      document.body.removeChild(anchor);
+    } catch (error) {
+      console.error('Failed to download file:', error);
+      // Fallback: try opening the attachment page
+      try {
+        const attachmentInfo = await mediaApiEndpoints.getAttachment(attachmentId);
+        if (attachmentInfo?.url || attachmentInfo?.download_url) {
+          window.open(attachmentInfo.url || attachmentInfo.download_url, '_blank');
+        }
+      } catch (fallbackError) {
+        console.error('Fallback download also failed:', fallbackError);
+        alert('Failed to download file. Please try again.');
+      }
+    } finally {
+      setDownloadingId(null);
+    }
   };
 
   const handleSendMessage = async () => {
@@ -372,7 +413,7 @@ export default function ChatWindow() {
                       : 'bg-gray-200 bg-opacity-80'
                   }`}>
                     {message.meta.file_type?.startsWith('image/') ? (
-                      <Image className={`w-4 h-4 ${
+                      <ImageIcon className={`w-4 h-4 ${
                         isOwn ? 'text-white' : 'text-gray-600'
                       }`} />
                     ) : (
@@ -407,10 +448,22 @@ export default function ChatWindow() {
                       </div>
                     </div>
                     {message.meta.attachment_id && message.meta.status === 'ready' ? (
-                      <button className={`text-xs underline opacity-75 hover:opacity-100 ${
-                        isOwn ? 'text-white' : 'text-indigo-600'
-                      }`}>
-                        Download
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleDownload(message.meta.attachment_id, message.meta.file_name);
+                        }}
+                        disabled={downloadingId === message.meta.attachment_id}
+                        className={`text-xs underline opacity-75 hover:opacity-100 flex items-center space-x-1 ${
+                          isOwn ? 'text-white' : 'text-indigo-600'
+                        } ${downloadingId === message.meta.attachment_id ? 'opacity-50 cursor-not-allowed' : ''}`}
+                      >
+                        {downloadingId === message.meta.attachment_id ? (
+                          <Loader2 className="w-3 h-3 animate-spin" />
+                        ) : (
+                          <Download className="w-3 h-3" />
+                        )}
+                        <span>{downloadingId === message.meta.attachment_id ? 'Downloading...' : 'Download'}</span>
                       </button>
                     ) : (
                       <div className={`w-2 h-2 rounded-full animate-pulse ${
@@ -590,10 +643,13 @@ export default function ChatWindow() {
               {selectedFiles.map((fileObj) => (
                 <div key={fileObj.id} className="flex items-center space-x-3 p-2 bg-white rounded border">
                   {fileObj.preview ? (
-                    <img 
-                      src={fileObj.preview} 
+                    <Image
+                      width={40}
+                      height={40}
+                      src={fileObj.preview}
                       alt={fileObj.name}
-                      className="w-10 h-10 object-cover rounded"
+                      className="object-cover rounded"
+                      unoptimized
                     />
                   ) : (
                     <div className="w-10 h-10 bg-gray-200 rounded flex items-center justify-center">

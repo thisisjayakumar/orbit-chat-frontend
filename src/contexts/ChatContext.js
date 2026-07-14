@@ -1,8 +1,9 @@
 'use client';
 
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useMemo } from 'react';
 import { useAuth } from './AuthContext';
 import { chatApiEndpoints, presenceApiEndpoints, mediaApiEndpoints, apiHelpers } from '@/utils/api-list';
+import { devLog } from '@/utils/debug';
 import debugStorage from '@/utils/debug-storage';
 
 const ChatContext = createContext({});
@@ -19,32 +20,32 @@ export const ChatProvider = ({ children }) => {
   const { user, isAuthenticated, getMqttClient } = useAuth();
   
   // Helper functions for localStorage persistence
-  const getStorageKey = (key) => `orbit_chat_${user?.id}_${key}`;
+  const getStorageKey = useCallback((key) => `orbit_chat_${user?.id}_${key}`, [user?.id]);
   
-  const loadFromStorage = (key, defaultValue = null) => {
+  const loadFromStorage = useCallback((key, defaultValue = null) => {
     if (typeof window === 'undefined' || !user?.id) return defaultValue;
     try {
       const storageKey = getStorageKey(key);
       const stored = localStorage.getItem(storageKey);
       const parsed = stored ? JSON.parse(stored) : defaultValue;
-      console.log(`📂 Loaded ${key} from storage:`, { key: storageKey, found: !!stored, dataLength: Array.isArray(parsed) ? parsed.length : Object.keys(parsed || {}).length });
+
       return parsed;
     } catch (error) {
       console.warn(`Failed to load ${key} from storage:`, error);
       return defaultValue;
     }
-  };
+  }, [getStorageKey, user?.id]);
   
-  const saveToStorage = (key, value) => {
+  const saveToStorage = useCallback((key, value) => {
     if (typeof window === 'undefined' || !user?.id) return;
     try {
       const storageKey = getStorageKey(key);
       localStorage.setItem(storageKey, JSON.stringify(value));
-      console.log(`💾 Saved ${key} to storage:`, { key: storageKey, dataLength: Array.isArray(value) ? value.length : Object.keys(value || {}).length });
+
     } catch (error) {
       console.warn(`Failed to save ${key} to storage:`, error);
     }
-  };
+  }, [getStorageKey, user?.id]);
   
   // State - initialize with empty values first, load from storage after user is available
   const [conversations, setConversations] = useState([]);
@@ -62,8 +63,6 @@ export const ChatProvider = ({ children }) => {
   // Load cached data when user becomes available
   useEffect(() => {
     if (user?.id && typeof window !== 'undefined') {
-      console.log('🔄 User available, loading cached data for user:', user.id);
-      
       // Enable storage watcher for debugging
       if (process.env.NODE_ENV === 'development') {
         debugStorage.watchStorage();
@@ -88,15 +87,9 @@ export const ChatProvider = ({ children }) => {
       if (Object.keys(cachedParticipants).length > 0) {
         setParticipants(cachedParticipants);
       }
-      
-      console.log('✅ Loaded cached data:', {
-        conversations: cachedConversations.length,
-        activeConversation: cachedActiveConversation,
-        messages: Object.keys(cachedMessages).length,
-        participants: Object.keys(cachedParticipants).length
-      });
+
     }
-  }, [user?.id]);
+  }, [user?.id, loadFromStorage]);
 
   // Load conversations
   const loadConversations = useCallback(async (forceRefresh = false) => {
@@ -191,6 +184,105 @@ export const ChatProvider = ({ children }) => {
     }
   }, []);
 
+  // Handle new message from MQTT
+  const handleNewMessage = useCallback((messageData, topic) => {
+    const conversationId = topic.split('/')[1];
+    
+    // Ensure is_read is set for proper read receipt display
+    // Own messages: mark as not read initially (will be updated after backend processes)
+    // Other's messages: mark as not read (will be updated after markAsRead call)
+    const enrichedMessage = {
+      ...messageData,
+      is_read: messageData.is_read === undefined ? false : messageData.is_read
+    };
+    
+    setMessages(prev => {
+      const existingMessages = prev[conversationId] || [];
+      
+      const messageExists = existingMessages.some(msg => msg.id === enrichedMessage.id);
+      
+      if (messageExists) {
+        return prev;
+      }
+      
+      return {
+        ...prev,
+        [conversationId]: [enrichedMessage, ...existingMessages]
+      };
+    });
+
+    // Update conversation's latest message
+    setConversations(prev => 
+      prev.map(conv => 
+        conv.id === conversationId 
+          ? { ...conv, latest_message: enrichedMessage }
+          : conv
+      )
+    );
+
+    if (conversationId === activeConversation && enrichedMessage.sender_id !== user?.id) {
+      // Refresh messages in background to update read status
+      setTimeout(async () => {
+        try {
+          const freshMessages = await chatApiEndpoints.getMessages(conversationId, 50, 0);
+          setMessages(prev => ({
+            ...prev,
+            [conversationId]: freshMessages
+          }));
+        } catch (error) {
+          console.warn('Failed to refresh messages after MQTT delivery:', error);
+        }
+      }, 1000);
+    }
+  }, [user, activeConversation]);
+
+  // Handle typing indicator from MQTT
+  const handleTypingIndicator = useCallback((typingData, topic) => {
+    const conversationId = topic.split('/')[1];
+    
+    setTypingUsers(prev => {
+      const conversationTyping = prev[conversationId] || {};
+      
+      if (typingData.is_typing) {
+        return {
+          ...prev,
+          [conversationId]: {
+            ...conversationTyping,
+            [typingData.user_id]: {
+              display_name: typingData.display_name,
+              timestamp: new Date(typingData.timestamp)
+            }
+          }
+        };
+      } else {
+        const { [typingData.user_id]: removed, ...remaining } = conversationTyping;
+        return {
+          ...prev,
+          [conversationId]: remaining
+        };
+      }
+    });
+
+    setTimeout(() => {
+      setTypingUsers(prev => {
+        const conversationTyping = prev[conversationId] || {};
+        const { [typingData.user_id]: removed, ...remaining } = conversationTyping;
+        return {
+          ...prev,
+          [conversationId]: remaining
+        };
+      });
+    }, 5000);
+  }, []);
+
+  // Handle presence updates from MQTT
+  const handlePresenceUpdate = useCallback((presenceData) => {
+    setPresenceData(prev => ({
+      ...prev,
+      [presenceData.user_id]: presenceData
+    }));
+  }, []);
+
   // Select active conversation
   const selectConversation = useCallback(async (conversationId) => {
     try {
@@ -238,7 +330,7 @@ export const ChatProvider = ({ children }) => {
       console.error('Failed to select conversation:', error);
       setError(error.message);
     }
-  }, [messages, participants, mqttClient, loadMessages, loadParticipants]);
+  }, [messages, participants, mqttClient, loadMessages, loadParticipants, handleNewMessage, handleTypingIndicator]);
 
   // Send message
   const sendMessage = useCallback(async (conversationId, content, contentType = 'text/plain') => {
@@ -410,88 +502,6 @@ export const ChatProvider = ({ children }) => {
     }
   }, [selectConversation]);
 
-  // Handle new message from MQTT
-  const handleNewMessage = useCallback((messageData, topic) => {
-    const conversationId = topic.split('/')[1];
-    
-    setMessages(prev => {
-      const existingMessages = prev[conversationId] || [];
-      
-      const messageExists = existingMessages.some(msg => msg.id === messageData.id);
-      
-      if (messageExists) {
-        return prev;
-      }
-      
-      return {
-        ...prev,
-        [conversationId]: [messageData, ...existingMessages]
-      };
-    });
-
-    // Update conversation's latest message
-    setConversations(prev => 
-      prev.map(conv => 
-        conv.id === conversationId 
-          ? { ...conv, latest_message: messageData }
-          : conv
-      )
-    );
-
-    if (conversationId === activeConversation && messageData.sender_id !== user?.id) {
-      setTimeout(async () => {
-        await loadMessages(conversationId);
-      }, 1000);
-    }
-  }, [user, activeConversation, loadMessages]);
-
-  // Handle typing indicator from MQTT
-  const handleTypingIndicator = useCallback((typingData, topic) => {
-    const conversationId = topic.split('/')[1];
-    
-    setTypingUsers(prev => {
-      const conversationTyping = prev[conversationId] || {};
-      
-      if (typingData.is_typing) {
-        return {
-          ...prev,
-          [conversationId]: {
-            ...conversationTyping,
-            [typingData.user_id]: {
-              display_name: typingData.display_name,
-              timestamp: new Date(typingData.timestamp)
-            }
-          }
-        };
-      } else {
-        const { [typingData.user_id]: removed, ...remaining } = conversationTyping;
-        return {
-          ...prev,
-          [conversationId]: remaining
-        };
-      }
-    });
-
-    setTimeout(() => {
-      setTypingUsers(prev => {
-        const conversationTyping = prev[conversationId] || {};
-        const { [typingData.user_id]: removed, ...remaining } = conversationTyping;
-        return {
-          ...prev,
-          [conversationId]: remaining
-        };
-      });
-    }, 5000);
-  }, []);
-
-  // Handle presence updates from MQTT
-  const handlePresenceUpdate = useCallback((presenceData) => {
-    setPresenceData(prev => ({
-      ...prev,
-      [presenceData.user_id]: presenceData
-    }));
-  }, []);
-
   // Initialize MQTT subscriptions
   useEffect(() => {
     if (!mqttClient || !mqttClient.isConnected || !user) return;
@@ -552,9 +562,7 @@ export const ChatProvider = ({ children }) => {
       
       if (idsToRefresh.length > 0) {
         const userIdsAsStrings = idsToRefresh.map(id => String(id));
-        console.log('Refreshing presence data for users:', userIdsAsStrings);
         const presenceResponse = await presenceApiEndpoints.getMultipleUserPresence(userIdsAsStrings);
-        console.log('Presence data refreshed:', presenceResponse);
         setPresenceData(prev => ({ ...prev, ...presenceResponse }));
         return presenceResponse;
       }
@@ -568,25 +576,25 @@ export const ChatProvider = ({ children }) => {
     if (user?.id && conversations.length > 0) {
       saveToStorage('conversations', conversations);
     }
-  }, [conversations, user?.id]);
+  }, [conversations, user?.id, saveToStorage]);
 
   useEffect(() => {
     if (user?.id && activeConversation) {
       saveToStorage('activeConversation', activeConversation);
     }
-  }, [activeConversation, user?.id]);
+  }, [activeConversation, user?.id, saveToStorage]);
 
   useEffect(() => {
     if (user?.id && Object.keys(messages).length > 0) {
       saveToStorage('messages', messages);
     }
-  }, [messages, user?.id]);
+  }, [messages, user?.id, saveToStorage]);
 
   useEffect(() => {
     if (user?.id && Object.keys(participants).length > 0) {
       saveToStorage('participants', participants);
     }
-  }, [participants, user?.id]);
+  }, [participants, user?.id, saveToStorage]);
 
   // Clear storage on logout
   useEffect(() => {
@@ -612,18 +620,16 @@ export const ChatProvider = ({ children }) => {
       // Small delay to ensure cached data is loaded first
       const timer = setTimeout(() => {
         if (conversations.length > 0) {
-          console.log('📱 Using cached conversations, will refresh in background');
           // Refresh in background after a delay
           setTimeout(() => loadConversations(true), 2000);
         } else {
-          console.log('📡 No cached conversations, loading fresh data');
           loadConversations();
         }
       }, 100);
       
       return () => clearTimeout(timer);
     }
-  }, [isAuthenticated, user?.id, conversations.length]);
+  }, [isAuthenticated, user?.id, conversations.length, loadConversations]);
 
   // Refresh presence data periodically and on auth
   useEffect(() => {
@@ -641,7 +647,6 @@ export const ChatProvider = ({ children }) => {
 
     // Listen for presence update events
     const handlePresenceUpdated = (event) => {
-      console.log('Received presence update event:', event.detail);
       // Refresh presence data immediately when we get an update event
       refreshPresenceData();
     };
@@ -681,20 +686,19 @@ export const ChatProvider = ({ children }) => {
   // Get user presence
   const getUserPresence = useCallback((userId) => {
     const presence = presenceData[userId] || { status: 'offline' };
-    console.log(`Getting presence for user ${userId}:`, presence);
     return presence;
   }, [presenceData]);
 
   // Debug function to inspect storage
   const debugChatStorage = useCallback(() => {
-    console.log('=== CHAT CONTEXT DEBUG ===');
-    console.log('Current state:');
-    console.log('- conversations:', conversations.length);
-    console.log('- activeConversation:', activeConversation);
-    console.log('- messages:', Object.keys(messages).length, 'conversations with messages');
-    console.log('- participants:', Object.keys(participants).length, 'conversations with participants');
+    devLog('=== CHAT CONTEXT DEBUG ===');
+    devLog('Current state:');
+    devLog('- conversations:', conversations.length);
+    devLog('- activeConversation:', activeConversation);
+    devLog('- messages:', Object.keys(messages).length, 'conversations with messages');
+    devLog('- participants:', Object.keys(participants).length, 'conversations with participants');
     
-    console.log('\nLocalStorage data:');
+    devLog('\nLocalStorage data:');
     debugStorage.logStorageSummary();
     
     return {
@@ -703,7 +707,7 @@ export const ChatProvider = ({ children }) => {
     };
   }, [conversations, activeConversation, messages, participants]);
 
-  const value = {
+  const value = useMemo(() => ({
     // State
     conversations,
     activeConversation,
@@ -734,7 +738,14 @@ export const ChatProvider = ({ children }) => {
     
     // Debug
     debugChatStorage,
-  };
+  }), [
+    conversations, activeConversation, messages, participants, presenceData,
+    typingUsers, isLoading, error,
+    loadConversations, loadMessages, loadParticipants, selectConversation,
+    sendMessage, sendMessageWithFiles, sendTypingIndicator, createConversation,
+    getConversation, getMessages, getParticipants, getTypingUsers, getUserPresence,
+    refreshPresenceData, debugChatStorage,
+  ]);
 
   // Make context available globally for debugging
   useEffect(() => {

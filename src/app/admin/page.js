@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { authHelpers } from '@/utils/api-utils';
+import Image from 'next/image';
 import { 
   Users, 
   UserPlus, 
@@ -22,6 +23,7 @@ import {
   AlertTriangle,
   Copy
 } from 'lucide-react';
+import { showToast } from '@/components/Toast';
 
 export default function AdminDashboard() {
   const router = useRouter();
@@ -304,9 +306,13 @@ export default function AdminDashboard() {
                       {user?.organization_id}
                     </code>
                     <button
-                      onClick={() => {
-                        navigator.clipboard.writeText(user?.organization_id || '');
-                        // You could add a toast notification here
+                      onClick={async () => {
+                        try {
+                          await navigator.clipboard.writeText(user?.organization_id || '');
+                          showToast('Organization ID copied!');
+                        } catch (err) {
+                          console.error('Failed to copy:', err);
+                        }
                       }}
                       className="px-3 py-2 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 flex items-center space-x-1"
                     >
@@ -315,7 +321,7 @@ export default function AdminDashboard() {
                     </button>
                   </div>
                   <p className="text-xs text-blue-600 mt-2">
-                    New users should paste this ID in the "Organization ID" field during registration
+                    New users should paste this ID in the{' '}&ldquo;Organization ID&rdquo;{' '}field during registration
                   </p>
                 </div>
               </div>
@@ -396,10 +402,13 @@ export default function AdminDashboard() {
                       {/* Avatar */}
                       <div className="flex-shrink-0 h-10 w-10">
                         {userData.avatar_url ? (
-                          <img 
-                            className="h-10 w-10 rounded-full" 
-                            src={userData.avatar_url} 
+                          <Image
+                            width={40}
+                            height={40}
+                            className="rounded-full"
+                            src={userData.avatar_url}
                             alt={userData.display_name}
+                            unoptimized
                           />
                         ) : (
                           <div className="h-10 w-10 rounded-full bg-gray-200 flex items-center justify-center">
